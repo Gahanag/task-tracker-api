@@ -1,6 +1,10 @@
 'use strict';
 
 require('dotenv').config();
+const { execSync } = require('child_process');
+try {
+  execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+} catch(e) { console.error('Migration failed:', e.message); }
 const app = require('./app');
 const { connectDB } = require('./config/database');
 const { connectRedis } = require('./config/redis');
