@@ -1,0 +1,163 @@
+// prisma/schema.prisma
+// Task Tracker API — Database Schema
+// Design Decision: Using PostgreSQL with Prisma ORM for type-safety and migration management.
+// Composite indexes on (assigneeId, status) and (projectId, status) cover the most
+// common query patterns (list tasks by assignee, filter by status).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+  BLOCKED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// ─── Models ─────────────────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users    User[]
+  projects Project[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String   @map("password_hash")
+  name           String
+  role           Role     @default(MEMBER)
+  organizationId String   @map("organization_id")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTasks  Task[]         @relation("AssignedTasks")
+  createdTasks   Task[]         @relation("CreatedTasks")
+  refreshTokens  RefreshToken[]
+  statusHistory  TaskStatusHistory[]
+
+  // Index on email is auto-created via @unique
+  // Index on organizationId for fast user listing per org
+  @@index([organizationId])
+  @@index([role, organizationId])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  revokedAt DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+model Project {
+  id             String   @id @default(uuid())
+  name           String
+  description    String?
+  organizationId String   @map("organization_id")
+  createdById    String   @map("created_by_id")
+  isArchived     Boolean  @default(false) @map("is_archived")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+
+  @@index([organizationId])
+  @@map("projects")
+}
+
+model Task {
+  id             String     @id @default(uuid())
+  title          String
+  description    String?
+  priority       Priority   @default(MEDIUM)
+  status         TaskStatus @default(TODO)
+  assigneeId     String?    @map("assignee_id")
+  createdById    String     @map("created_by_id")
+  projectId      String     @map("project_id")
+  organizationId String     @map("organization_id")
+  dueDate        DateTime?  @map("due_date")
+  completedAt    DateTime?  @map("completed_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  assignee      User?              @relation("AssignedTasks", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy     User               @relation("CreatedTasks", fields: [createdById], references: [id])
+  project       Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  statusHistory TaskStatusHistory[]
+
+  // ── Indexes ──────────────────────────────────────────────────────────────
+  // Composite index: covers "tasks for this assignee" + "tasks by status for assignee"
+  // This is the primary Redis cache key pattern too: assignee:status
+  @@index([assigneeId, status])
+
+  // Covers admin/manager queries: all tasks in a project filtered by status
+  @@index([projectId, status])
+
+  // Due date index for overdue analytics and sorting
+  @@index([dueDate])
+
+  // Priority filtering
+  @@index([organizationId, priority])
+
+  // Status-only index for org-wide status queries
+  @@index([organizationId, status])
+
+  @@map("tasks")
+}
+
+model TaskStatusHistory {
+  id         String     @id @default(uuid())
+  taskId     String     @map("task_id")
+  fromStatus TaskStatus? @map("from_status")
+  toStatus   TaskStatus @map("to_status")
+  changedById String    @map("changed_by_id")
+  changedAt  DateTime   @default(now()) @map("changed_at")
+  note       String?
+
+  task      Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  changedBy User @relation(fields: [changedById], references: [id])
+
+  @@index([taskId])
+  @@index([changedAt])
+  @@map("task_status_history")
+}
