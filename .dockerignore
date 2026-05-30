@@ -1,0 +1,12 @@
+node_modules
+.env
+.env.*
+!.env.example
+npm-debug.log
+.git
+.gitignore
+README.md
+tests/
+coverage/
+*.test.js
+.nyc_output
