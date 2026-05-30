@@ -1,0 +1,98 @@
+version: '3.9'
+
+services:
+  # ─── API ────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: task_tracker_api
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://taskuser:taskpass@postgres:5432/tasktracker?schema=public
+      REDIS_URL: redis://redis:6379
+      REDIS_TTL_SECONDS: 300
+      JWT_ACCESS_SECRET: dev_access_secret_min_32_chars_long_here
+      JWT_REFRESH_SECRET: dev_refresh_secret_min_32_chars_long_here
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX: 200
+      RUN_SEED: "true"
+    # Entrypoint: run migrations + seed, then start server
+    # This guarantees schema exists before the API starts — no race condition
+    command: sh -c "npx prisma migrate deploy && node src/scripts/seed.js && node src/server.js"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - task_net
+
+  # ─── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: task_tracker_postgres
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: taskpass
+      POSTGRES_DB: tasktracker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d tasktracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - task_net
+
+  # ─── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: task_tracker_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - task_net
+
+  # ─── Redis Commander (optional dev UI for cache inspection) ──────────────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: task_tracker_redis_ui
+    environment:
+      REDIS_HOSTS: "local:redis:6379"
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - task_net
+    profiles:
+      - dev  # Only starts with: docker compose --profile dev up
+
+networks:
+  task_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
