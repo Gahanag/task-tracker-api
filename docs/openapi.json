@@ -1,0 +1,372 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Team Task Tracker API",
+    "description": "REST API for team-based task tracking with JWT auth, RBAC, Redis caching, and containerized deployment.\n\n## Authentication\nUse the `/auth/register` or `/auth/login` endpoint to obtain tokens. Include the access token as `Authorization: Bearer <token>` on all protected routes.\n\n## Roles\n- **ADMIN** — Full access: users, projects, tasks\n- **MANAGER** — Manage projects and tasks; no user management\n- **MEMBER** — View and update only assigned tasks",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Task Tracker API"
+    }
+  },
+  "servers": [
+    { "url": "http://localhost:3000/api/v1", "description": "Local (Docker)" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "integer", "example": 400 },
+          "code": { "type": "string", "example": "VALIDATION_ERROR" },
+          "message": { "type": "string", "example": "due_date must be a future date" }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "role": { "type": "string", "enum": ["ADMIN", "MANAGER", "MEMBER"] },
+          "organizationId": { "type": "string", "format": "uuid" },
+          "isActive": { "type": "boolean" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+          "status": { "type": "string", "enum": ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "BLOCKED"] },
+          "assignee": { "$ref": "#/components/schemas/User" },
+          "dueDate": { "type": "string", "format": "date-time" },
+          "completedAt": { "type": "string", "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "isArchived": { "type": "boolean" },
+          "organizationId": { "type": "string", "format": "uuid" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Pagination": {
+        "type": "object",
+        "properties": {
+          "total": { "type": "integer" },
+          "page": { "type": "integer" },
+          "limit": { "type": "integer" },
+          "totalPages": { "type": "integer" },
+          "hasNext": { "type": "boolean" },
+          "hasPrev": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "security": [{ "BearerAuth": [] }],
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Register a new user",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "email", "password", "organizationName"],
+                "properties": {
+                  "name": { "type": "string", "example": "Alice Admin" },
+                  "email": { "type": "string", "example": "alice@acme.com" },
+                  "password": { "type": "string", "example": "Admin@1234", "description": "Min 8 chars, 1 upper, 1 lower, 1 digit" },
+                  "organizationName": { "type": "string", "example": "Acme Corp" },
+                  "role": { "type": "string", "enum": ["ADMIN", "MANAGER", "MEMBER"], "default": "MEMBER" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Registered successfully" },
+          "400": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Email already exists" }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Login and receive tokens",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "example": "admin@acme.com" },
+                  "password": { "type": "string", "example": "Admin@1234" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Login successful, returns accessToken + refreshToken" },
+          "401": { "description": "Invalid credentials" }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Rotate refresh token",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["refreshToken"],
+                "properties": { "refreshToken": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "New token pair issued" },
+          "401": { "description": "Invalid or expired refresh token" }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Logout (revoke refresh token)",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["refreshToken"],
+                "properties": { "refreshToken": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Logged out" } }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Get current user profile",
+        "responses": {
+          "200": { "description": "Current user" },
+          "401": { "description": "Unauthorized" }
+        }
+      }
+    },
+    "/tasks": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "List tasks (paginated + filterable)",
+        "description": "MEMBER sees only tasks assigned to them. ADMIN/MANAGER see all org tasks.",
+        "parameters": [
+          { "in": "query", "name": "page", "schema": { "type": "integer", "default": 1 } },
+          { "in": "query", "name": "limit", "schema": { "type": "integer", "default": 20 } },
+          { "in": "query", "name": "status", "schema": { "type": "string", "enum": ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "BLOCKED"] } },
+          { "in": "query", "name": "priority", "schema": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] } },
+          { "in": "query", "name": "assigneeId", "schema": { "type": "string", "format": "uuid" } },
+          { "in": "query", "name": "projectId", "schema": { "type": "string", "format": "uuid" } },
+          { "in": "query", "name": "sortBy", "schema": { "type": "string", "default": "createdAt" } },
+          { "in": "query", "name": "sortOrder", "schema": { "type": "string", "enum": ["asc", "desc"], "default": "desc" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated task list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } },
+                    "pagination": { "$ref": "#/components/schemas/Pagination" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "Create a task (ADMIN/MANAGER)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "projectId"],
+                "properties": {
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"], "default": "MEDIUM" },
+                  "assigneeId": { "type": "string", "format": "uuid" },
+                  "projectId": { "type": "string", "format": "uuid" },
+                  "dueDate": { "type": "string", "format": "date-time", "description": "Must be a future date" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Task created" },
+          "400": { "description": "Validation error" },
+          "403": { "description": "Forbidden" }
+        }
+      }
+    },
+    "/tasks/{id}": {
+      "get": {
+        "tags": ["Tasks"],
+        "summary": "Get task by ID",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Task detail with status history" }, "404": { "description": "Not found" } }
+      },
+      "put": {
+        "tags": ["Tasks"],
+        "summary": "Update task metadata (ADMIN/MANAGER)",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": { "type": "string" },
+                  "description": { "type": "string" },
+                  "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+                  "assigneeId": { "type": "string", "format": "uuid" },
+                  "dueDate": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Updated" }, "403": { "description": "Forbidden" }, "404": { "description": "Not found" } }
+      },
+      "delete": {
+        "tags": ["Tasks"],
+        "summary": "Delete task (ADMIN only)",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "responses": { "200": { "description": "Deleted" }, "403": { "description": "Forbidden" } }
+      }
+    },
+    "/tasks/{id}/status": {
+      "patch": {
+        "tags": ["Tasks"],
+        "summary": "Update task status (assignee or MANAGER+)",
+        "description": "Enforces state machine transitions:\n- TODO → IN_PROGRESS → IN_REVIEW → DONE\n- Any active state → BLOCKED\n- DONE is terminal",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {
+                  "status": { "type": "string", "enum": ["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE", "BLOCKED"] },
+                  "note": { "type": "string", "description": "Optional note about the status change" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Status updated" },
+          "400": { "description": "Invalid status transition" },
+          "403": { "description": "Not assignee or manager" }
+        }
+      }
+    },
+    "/projects": {
+      "get": { "tags": ["Projects"], "summary": "List all projects in org", "responses": { "200": { "description": "Project list" } } },
+      "post": {
+        "tags": ["Projects"],
+        "summary": "Create project (ADMIN/MANAGER)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Project created" } }
+      }
+    },
+    "/users": {
+      "get": { "tags": ["Users"], "summary": "List org users (ADMIN/MANAGER)", "responses": { "200": { "description": "User list" } } }
+    },
+    "/users/{id}/role": {
+      "patch": {
+        "tags": ["Users"],
+        "summary": "Update user role (ADMIN only)",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["role"],
+                "properties": { "role": { "type": "string", "enum": ["ADMIN", "MANAGER", "MEMBER"] } }
+              }
+            }
+          }
+        },
+        "responses": { "200": { "description": "Role updated" } }
+      }
+    },
+    "/analytics": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Get task analytics (ADMIN/MANAGER)",
+        "description": "Returns: overdue task count per user, average completion time, status distribution, priority distribution",
+        "responses": { "200": { "description": "Analytics data" }, "403": { "description": "Forbidden" } }
+      }
+    }
+  }
+}
