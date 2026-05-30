@@ -24,10 +24,10 @@ async function main() {
 
   await prisma.task.create({ data: { title: "Setup CI/CD", priority: "HIGH", status: "IN_PROGRESS", assigneeId: member1.id, createdById: manager.id, projectId: project.id, organizationId: org.id, dueDate: new Date(Date.now() + 7*24*60*60*1000) } });
   await prisma.task.create({ data: { title: "Write API Docs", priority: "MEDIUM", status: "TODO", assigneeId: member2.id, createdById: manager.id, projectId: project.id, organizationId: org.id } });
-  await prisma.task.create({ data: { title: "Fix Safari Bug", priority: "HIGH", status: "BLOCKED", assigneeId: member1.id, createdById: admin.id, projectId: project.id, organizationId: org.id, dueDate: new Date(Date.now() - 2*24*60*60*1000) } });
+  await prisma.task.create({ data: { title: "Fix Safari Bug", priority: "HIGH", status: "BLOCKED", assigneeId: member1.id, createdById: admin.id, projectId: project.id, organizationId: org.id } });
   await prisma.task.create({ data: { title: "Onboarding Redesign", priority: "LOW", status: "DONE", assigneeId: member2.id, createdById: manager.id, projectId: project.id, organizationId: org.id, completedAt: new Date() } });
 
-  console.log("Seeded! admin@acme.com / Admin@1234");
+  console.log("Seeded OK - admin@acme.com / Admin@1234");
 }
 
 main().catch(e => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());
